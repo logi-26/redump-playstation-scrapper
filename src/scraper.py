@@ -20,14 +20,14 @@ DATABASE_PATH = join(SCRIPT_PATH, 'redump_playstation.db')
 
 LETTERS = ['~', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z']
 BASE_URL = 'http://redump.org'
+PROCESSED_GAMES = []
 
-PRINT_DATA = True
+PRINT_DATA = False
 WRITE_DATA = False
-STORE_DATA = False
-LIMIT_PROCESSED_GAMES = 5
+STORE_DATA = True
 
 # It is best practice to have a short delay to prevent sending too many page requests to the server in quick succession
-DELAY = 0
+DELAY = 0.5
 
 
 # **********************************************************************************************************************
@@ -42,6 +42,12 @@ def _format_game_id(id):
 	if ',' in id:
 		id = id.split(',')[0]
 	return id.replace(' ', '_').replace('-', '_')
+# **********************************************************************************************************************
+
+
+# **********************************************************************************************************************
+def _format_game_name(game_name):
+	return game_name.replace('"', '').replace("'", "")
 # **********************************************************************************************************************
 
 
@@ -110,13 +116,10 @@ def _write_file(game_name, game_id, game_release_date, has_edc, has_anti_modchip
 
 # **********************************************************************************************************************
 def _insert_data(game_name, game_id, game_release_date, has_edc, has_anti_modchip, has_libcrypt, tracks, length_total, sectors_total, size_total, crc_total):
-
 	edc = True if has_edc == 'Yes' else False
 	anti_modchip = True if has_anti_modchip == 'Yes' else False
 	libcrypt = True if has_libcrypt == 'Yes' else False
 	insert_game(game_id, game_name, game_release_date, edc, anti_modchip, libcrypt, len(tracks))
-	
-	
 	for track in tracks:
 		insert_track(game_id, track[0], track[1], track[2], track[3], track[4], track[5], track[6], track[7])
 		
@@ -152,6 +155,57 @@ def _parse_track(track_rows):
 
 
 # **********************************************************************************************************************
+def _parse_multi_track(track_rows, number_of_tracks, number_of_colums):
+	tracks = []
+
+	# Remove the first 2 rows from the table
+	track_rows.pop(0)
+	track_rows.pop(0)
+
+	# Loop through the columns and rows in the table
+	count = 0
+	for row in range(int(number_of_tracks)):
+		for column in range(number_of_colums):
+			if column == 0:
+				track_number = track_rows[count].text
+			elif column == 2 and number_of_colums == 9:
+				pregap = track_rows[count].text
+			elif column == 3 and number_of_colums == 10:
+				pregap = track_rows[count].text
+			elif column == 3 and number_of_colums == 9:
+				length = track_rows[count].text
+			elif column == 4 and number_of_colums == 10:
+				length = track_rows[count].text
+			elif column == 4 and number_of_colums == 9:
+				sectors = track_rows[count].text
+			elif column == 5 and number_of_colums == 10:
+				sectors = track_rows[count].text 
+			elif column == 5 and number_of_colums == 9:
+				size = track_rows[count].text 
+			elif column == 6 and number_of_colums == 10:
+				column = track_rows[count].text	
+			elif column == 6 and number_of_colums == 9:
+				crc = track_rows[count].text	  
+			elif column == 7 and number_of_colums == 10:
+				crc = track_rows[count].text 
+			elif column == 7 and number_of_colums == 9:
+				md5 = track_rows[count].text 
+			elif column == 8 and number_of_colums == 10:
+				md5 = track_rows[count].text	 
+			elif column == 8 and number_of_colums == 9:
+				sha = track_rows[count].text	
+				tracks.append([track_number, pregap, length, sectors, size, crc, md5, sha])
+			elif column == 9:
+				sha = track_rows[count].text	 
+				tracks.append([track_number, pregap, length, sectors, size, crc, md5, sha])
+
+			count += 1
+			
+	return tracks
+# **********************************************************************************************************************
+
+
+# **********************************************************************************************************************
 def _scrape_data():
 	# Loop through all of the letters in the array
 	for letter in LETTERS:
@@ -164,8 +218,8 @@ def _scrape_data():
 		soup = BeautifulSoup(page_content, features="lxml")
 
 		# Find all of the relevant links from the DIV
-		for link in soup.find_all("a"):
-			link_string = link.get("href")
+		for link in soup.find_all('a'):
+			link_string = link.get('href')
 			if link_string is not None:
 				if 'disc' in link_string and 'system' not in link_string:
 					if link_string.count('/') == 3:
@@ -175,20 +229,21 @@ def _scrape_data():
 		# Loop through all of the links
 		for count, game_link in enumerate(game_links):
 			page_content = _get_page_content(game_link)
-			soup = BeautifulSoup(page_content, features="lxml")
+			soup = BeautifulSoup(page_content, features='lxml')
 			
 			# Get the game name
 			game_name = soup.find('h1').text
+			game_name = _format_game_name(game_name)
 
 			# Get the game info
-			game_info_table = soup.find("table",{"class":"gameinfo"})
+			game_info_table = soup.find('table',{'class':'gameinfo'})
 			game_info_headers = game_info_table.find_all('th')
 			game_info = game_info_table.find_all('td')
 			
 			# Get the track number index (Sometimes it is the 11th element and sometimes it is the 12th)
 			tracks_number_index = None
 			for index, item in enumerate(game_info_headers):
-				if item.text == "Number of tracks":
+				if item.text == 'Number of tracks':
 					tracks_number_index = index
 				
 			# Get the game details
@@ -196,95 +251,53 @@ def _scrape_data():
 			
 			# Some games have more than 1 ID (for special edition versions of the disc etc) so we get the 1st ID
 			game_id = _format_game_id(game_id)
+			
+			# Prevent processing duplicate games
+			if game_id not in PROCESSED_GAMES:
 
-			# Get the track data
-			track_table = soup.find("table",{"class":"tracks"})
-			track_rows = track_table.find_all('td')
-			
-			# Initial array index offsets
-			track_number_index = 2
-			pregap_index = 4
-			length_index = 5
-			sectors_index = 6
-			size_index = 7
-			crc_index = 8
-			md5_index = 9
-			sha_index = 10
-			
-			# These variables are only used when there are multiple tracks
-			crc_total = size_total = sectors_total = length_total = 0
-			
-			tracks = []
-			track_number = pregap = length = sectors = size = crc = md5 = sha = None
-			
-			# If the cue_sheet contains a single track
-			if int(number_of_tracks) == 1:
-				track_number, pregap, length, sectors, size, crc, md5, sha = _parse_track(track_rows)
-				tracks.append([track_number, pregap, length, sectors, size, crc, md5, sha])	
-			else:
-				# If the cue_sheet contains multiple tracks
-				for i, row in enumerate(track_rows):
-					if i < len(track_rows) -2:
-						if i == len(track_rows) -3:
-							crc_total = row.text
-						elif i == len(track_rows) -4:
-							size_total = row.text
-						elif i == len(track_rows) -5:
-							sectors_total = row.text
-						elif i == len(track_rows) -6:
-							length_total = row.text
-						elif i == track_number_index:
-							track_number = row.text
-							track_number_index +=9
-							if track_number_index == len(track_rows) - 9:
-								track_number_index = 0
-						elif i == pregap_index:
-							pregap = row.text
-							pregap_index +=9
-							if pregap_index == len(track_rows) - 7:
-								pregap_index = 0	
-						elif i == length_index:
-							length = row.text
-							length_index +=9
-						elif i == sectors_index:
-							sectors = row.text
-							sectors_index +=9
-						elif i == size_index:
-							size = row.text
-							size_index +=9
-						elif i == crc_index:
-							crc = row.text
-							crc_index +=9
-						elif i == md5_index:
-							md5 = row.text
-							md5_index +=9
-						elif i == sha_index:
-							sha = row.text
-							sha_index +=9
-							tracks.append([track_number, pregap, length, sectors, size, crc, md5, sha])
+				# Get the track data
+				track_table = soup.find('table',{'class':'tracks'})
+				track_rows = track_table.find_all('td')
+				tracks = []
+				track_number = pregap = length = sectors = size = crc = md5 = sha = None
+				
+				# These variables are only used when there are multiple tracks
+				crc_total = size_total = sectors_total = length_total = 0
+				
+				# Get the number of columns from the table (can vary between 9 or 10 columns)
+				try:
+					number_of_colums = int(track_rows[0]['colspan'])
+				except (ValueError, KeyError) as e:
+					number_of_colums = 0
+				
+				# If the cue_sheet contains a single track
+				if int(number_of_tracks) == 1:
+					track_number, pregap, length, sectors, size, crc, md5, sha = _parse_track(track_rows)
+					tracks.append([track_number, pregap, length, sectors, size, crc, md5, sha])	
+				else:
+					tracks = _parse_multi_track(track_rows, number_of_tracks, number_of_colums)
+	
+				# Print the track data
+				if PRINT_DATA:
+					_print_game_info(game_name, game_id, game_release_date, has_edc, has_anti_modchip, has_libcrypt, number_of_tracks)
+					if tracks:
+						_print_track_info_multi(tracks)
+					if len(tracks) > 1:
+						_print_track_info_total(length_total, sectors_total, size_total, crc_total)
+					print('\n')
+				else:
+					print(f'Processed: {game_name}')
 					
-			# Print the track data
-			if PRINT_DATA:
-				_print_game_info(game_name, game_id, game_release_date, has_edc, has_anti_modchip, has_libcrypt, number_of_tracks)
-				if tracks:
-					_print_track_info_multi(tracks)
-				if len(tracks) > 1:
-					_print_track_info_total(length_total, sectors_total, size_total, crc_total)
-				print('\n')
-			else:
-				print(f'Processed: {game_name}')
+				if WRITE_DATA:
+					_write_file(game_name, game_id, game_release_date, has_edc, has_anti_modchip, has_libcrypt, tracks, length_total, sectors_total, size_total, crc_total)
+					
+				if STORE_DATA:
+					_insert_data(game_name, game_id, game_release_date, has_edc, has_anti_modchip, has_libcrypt, tracks, length_total, sectors_total, size_total, crc_total)
 				
-			if WRITE_DATA:
-				_write_file(game_name, game_id, game_release_date, has_edc, has_anti_modchip, has_libcrypt, tracks, length_total, sectors_total, size_total, crc_total)
+				# Add the game ID to the list of processed games
+				PROCESSED_GAMES.append(game_id)
 				
-			if STORE_DATA:
-				_insert_data(game_name, game_id, game_release_date, has_edc, has_anti_modchip, has_libcrypt, tracks, length_total, sectors_total, size_total, crc_total)
-			
-			# Stop if we reach a pre-defined limit
-			if count == LIMIT_PROCESSED_GAMES -1:
-				exit()
-				
-			sleep(DELAY)
+				sleep(DELAY)
 # **********************************************************************************************************************
 
 
@@ -304,6 +317,6 @@ def main():
 # **********************************************************************************************************************
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
 	main()
 	
